@@ -1,0 +1,348 @@
+import { toast } from "sonner";
+
+// Base URL pour l'API
+const API_URL = "http://localhost:5000/api";
+
+// Interface pour le token d'authentification
+interface AuthToken {
+  token: string;
+  expiresAt: number;
+}
+
+// Récupérer le token depuis le localStorage
+const getToken = (): string | null => {
+  const authData = localStorage.getItem("auth_token");
+  if (!authData) return null;
+  
+  try {
+    const parsedData: AuthToken = JSON.parse(authData);
+    // Vérifier si le token a expiré
+    if (parsedData.expiresAt < Date.now()) {
+      localStorage.removeItem("auth_token");
+      return null;
+    }
+    return parsedData.token;
+  } catch (error) {
+    localStorage.removeItem("auth_token");
+    return null;
+  }
+};
+
+// Sauvegarder le token dans le localStorage avec une expiration
+const saveToken = (token: string, expiresIn: number = 86400): void => {
+  const expiresAt = Date.now() + expiresIn * 1000;
+  localStorage.setItem("auth_token", JSON.stringify({ token, expiresAt }));
+};
+
+// Options par défaut pour fetch
+const defaultOptions = {
+  headers: {
+    "Content-Type": "application/json",
+  },
+};
+
+// Fonction principale pour faire des requêtes API
+const apiRequest = async <T>(
+  endpoint: string, 
+  method: string = "GET", 
+  data: any = null, 
+  requireAuth: boolean = true,
+  isBinary: boolean = false
+): Promise<T> => {
+  const options: RequestInit = {
+    ...defaultOptions,
+    method,
+  };
+
+  // Ajouter le token d'authentification si nécessaire
+  if (requireAuth) {
+    const token = getToken();
+    if (!token) {
+      toast.error("Session expirée, veuillez vous reconnecter");
+      throw new Error("Authentication required");
+    }
+    options.headers = {
+      ...options.headers as Record<string, string>,
+      Authorization: `Bearer ${token}`,
+    };
+  }
+
+
+  // Ajouter le body si des données sont fournies
+  if (data) {
+    options.body = JSON.stringify(data);
+  }
+
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, options);
+    
+    // Gérer les réponses binaires (PDF, CSV)
+    if (isBinary) {
+      return await response.blob() as unknown as T;
+    }
+    
+    // Traiter la réponse JSON
+    const responseData = await response.json();
+    
+    if (!response.ok) {
+      // Si la réponse n'est pas OK, lancer une erreur
+      throw new Error(responseData.message || "Une erreur est survenue");
+    }
+    
+    return responseData as T;
+  } catch (error: any) {
+    // Afficher l'erreur dans un toast
+    toast.error(error.message || "Une erreur est survenue");
+    throw error;
+  }
+};
+
+// API Service
+export const api = {
+  // Auth endpoints
+  auth: {
+    register: (userData: { name: string; email: string; password: string }) => 
+      apiRequest<{ user: any; token: string }>("/auth/register", "POST", userData, false),
+    
+    login: (credentials: { email: string; password: string }) => {
+      return apiRequest<{ user: any; token: string; expiresIn: number }>(
+        "/auth/login", 
+        "POST", 
+        credentials,
+        false
+      ).then(data => {
+        if (data.token) {
+          saveToken(data.token, data.expiresIn);
+        }
+        return data;
+      });
+    },
+    
+    logout: () => {
+      localStorage.removeItem("auth_token");
+      return Promise.resolve();
+    },
+    
+    getProfile: () => 
+      apiRequest<{ user: any }>("/auth/profile"),
+    
+    updateProfile: (userData: { name?: string; email?: string; password?: string }) => 
+      apiRequest<{ user: any }>("/auth/profile", "PUT", userData),
+    
+    deleteAccount: () => 
+      apiRequest<{ message: string }>("/auth/profile", "DELETE"),
+  },
+  
+  // Transactions endpoints
+  transactions: {
+    getAll: (filters?: { search?: string; startDate?: string; endDate?: string; categoryId?: string; limit?: number }) => {
+      const queryParams = new URLSearchParams();
+      
+      if (filters) {
+        if (filters.search) queryParams.append('search', filters.search);
+        if (filters.startDate) queryParams.append('startDate', filters.startDate);
+        if (filters.endDate) queryParams.append('endDate', filters.endDate);
+        if (filters.categoryId) queryParams.append('categoryId', filters.categoryId);
+        if (filters.limit) queryParams.append('limit', filters.limit.toString());
+      }
+      
+      const queryString = queryParams.toString();
+      const url = `/transactions${queryString ? `?${queryString}` : ''}`;
+      
+      return apiRequest<{ transactions: any[] }>(url, 'GET');
+    },
+    
+    getById: (id: string) => 
+      apiRequest<{ transaction: any }>(`/transactions/${id}`),
+    
+    create: (transactionData: { amount: number; type: "expense" | "income"; category: string; description: string; date: string; currency: string }) => 
+      apiRequest<{ transaction: any }>("/transactions", "POST", transactionData),
+    
+    update: (id: string, transactionData: { amount?: number; category?: string; description?: string; date?: string; currency?: string }) => 
+      apiRequest<{ transaction: any }>(`/transactions/${id}`, "PUT", transactionData),
+    
+    delete: (id: string) => 
+      apiRequest<{ message: string }>(`/transactions/${id}`, "DELETE"),
+  },
+  
+  // Categories endpoints
+  categories: {
+    getAll: () => 
+      apiRequest<{ categories: any[] }>("/categories"),
+    
+    getById: (id: string) => 
+      apiRequest<{ category: any }>(`/categories/${id}`),
+    
+    create: (categoryData: { name: string; color: string; type?: string; limit?: number }) => 
+      apiRequest<{ category: any }>("/categories", "POST", categoryData),
+    
+    update: (id: string, categoryData: { name?: string; color?: string; limit?: number }) => 
+      apiRequest<{ category: any }>(`/categories/${id}`, "PUT", categoryData),
+    
+    delete: (id: string) => 
+      apiRequest<{ message: string }>(`/categories/${id}`, "DELETE"),
+  },
+  
+  // Budgets and limits endpoints
+  budgets: {
+    getAll: () => 
+      apiRequest<{ budgets: any[] }>("/budgets"),
+    
+    create: (budgetData: { category: string; amount: number; period: "monthly" | "weekly" | "yearly" }) => 
+      apiRequest<{ budget: any }>("/budgets", "POST", budgetData),
+    
+    update: (id: string, budgetData: { amount?: number; period?: string }) => 
+      apiRequest<{ budget: any }>(`/budgets/${id}`, "PUT", budgetData),
+    
+    delete: (id: string) => 
+      apiRequest<{ message: string }>(`/budgets/${id}`, "DELETE"),
+  },
+  
+  // Statistics endpoints - version complètement mise à jour
+  statistics: {
+    getData: (params: { type: 'monthly' | 'weekly' | 'yearly'; year?: number; month?: number; category?: string }) => {
+      const queryParams = new URLSearchParams({
+        type: params.type,
+        ...(params.year && { year: params.year.toString() }),
+        ...(params.month && { month: params.month.toString() }),
+        ...(params.category && { category: params.category })
+      });
+      
+      return apiRequest<{ data: any[] }>(`/statistics?${queryParams.toString()}`);
+    },
+    
+    getSummary: () => 
+      apiRequest<{ summary: any }>("/statistics/summary"),
+    
+    getByCategory: (startDate: string, endDate: string) => 
+      apiRequest<{ categories: any[] }>(`/statistics/categories?startDate=${startDate}&endDate=${endDate}`),
+    
+    getIncomeSources: (startDate: string, endDate: string) => 
+      apiRequest<{ sources: any[] }>(`/statistics/income-sources?startDate=${startDate}&endDate=${endDate}`),
+    
+    getAdvancedMetrics: (period: 'week' | 'month' | 'year' = 'month') => 
+      apiRequest<{ metrics: any }>(`/statistics/advanced-metrics?period=${period}`),
+  },
+  
+  // Export endpoints
+  export: {
+    getPdf: (filters: { startDate?: string; endDate?: string; categoryId?: string }) => {
+      const queryParams = new URLSearchParams(filters as Record<string, string>);
+      return apiRequest<Blob>(`/export/pdf?${queryParams.toString()}`, "GET", null, true, true);
+    },
+    
+    getCsv: (filters: { startDate?: string; endDate?: string; categoryId?: string }) => {
+      const queryParams = new URLSearchParams(filters as Record<string, string>);
+      return apiRequest<Blob>(`/export/csv?${queryParams.toString()}`, "GET", null, true, true);
+    },
+  } as const,
+  
+  // Nouvelles routes pour les abonnements
+  subscriptions: {
+    getAll: () => apiRequest<{ subscriptions: any[] }>('/subscriptions'),
+    getUpcoming: () => apiRequest<{ subscriptions: any[] }>('/subscriptions/upcoming'),
+    create: (data: any) => apiRequest<any>('/subscriptions', 'POST', data),
+    update: (id: string, data: any) => apiRequest<any>(`/subscriptions/${id}`, 'PUT', data),
+    delete: (id: string) => apiRequest<{ success: boolean }>(`/subscriptions/${id}`, 'DELETE'),
+  },
+
+  // Nouvelles routes pour les finances
+  finance: {
+    getMonthlySummary: () => {
+      const now = new Date();
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+      
+      return apiRequest<{
+        totalIncome: number;
+        totalExpenses: number;
+        balance: number;
+        categories: Array<{ name: string; amount: number; percentage: number }>;
+      }>(`/finance/summary?startDate=${firstDay}&endDate=${lastDay}`);
+    },
+    
+    getSavingsGoal: () => 
+      apiRequest<{ goal: number; current: number; progress: number }>('/finance/savings-goal'),
+    
+    getUpcomingPayments: () => 
+      apiRequest<{ payments: Array<{ id: string; name: string; amount: number; dueDate: string }> }>('/finance/upcoming-payments'),
+    
+    getRecommendations: () => 
+      apiRequest<{ recommendations: Array<{ type: string; message: string; priority: 'high' | 'medium' | 'low' }> }>('/finance/recommendations'),
+  },
+
+  // Routes d'alertes mises à jour
+  alerts: {
+    getAll: (params?: { status?: string }) => {
+      const queryParams = new URLSearchParams();
+      if (params?.status) queryParams.append('status', params.status);
+      
+      const queryString = queryParams.toString();
+      const url = `/alerts${queryString ? `?${queryString}` : ''}`;
+      
+      return apiRequest<{ alerts: Array<{
+        id: string;
+        type: 'budget_limit' | 'unusual_expense' | 'monthly_report' | 'payment_due';
+        message: string;
+        read: boolean;
+        resolved: boolean;
+        createdAt: string;
+        metadata?: any;
+      }> }>(url);
+    },
+    
+    markAsRead: (alertIds: string[]) => 
+      apiRequest<{ updated: number }>('/alerts/read', 'PATCH', { alertIds }),
+    
+    markSingleAsRead: (id: string) => 
+      apiRequest<{ success: boolean }>(`/alerts/${id}/read`, 'PATCH'),
+    
+    markAsResolved: (id: string) => 
+      apiRequest<{ success: boolean }>(`/alerts/${id}/resolve`, 'PATCH'),
+    
+    generateSpendingAlerts: () => 
+      apiRequest<{ generated: number }>('/alerts/generate-spending', 'POST'),
+    
+    create: (alertData: { type: 'budget_limit' | 'unusual_expense' | 'monthly_report'; categoryId?: string; threshold?: number }) => 
+      apiRequest<{ alert: any }>('/alerts', 'POST', alertData),
+    
+    update: (id: string, data: { active: boolean }) => 
+      apiRequest<{ success: boolean }>(`/alerts/${id}`, 'PUT', data),
+    
+    dismiss: (id: string) => 
+      apiRequest<{ success: boolean }>(`/alerts/${id}/dismiss`, 'POST'),
+    
+    delete: (id: string) => 
+      apiRequest<{ success: boolean }>(`/alerts/${id}`, 'DELETE'),
+    
+    getSettings: () => 
+      apiRequest<{ 
+        email: boolean; 
+        app: boolean; 
+        budgetAlerts: boolean; 
+        unusualExpenses: boolean; 
+        monthlyReports: boolean 
+      }>('/alerts/settings'),
+    
+    updateSettings: (settings: { 
+      email?: boolean; 
+      app?: boolean; 
+      budgetAlerts?: boolean; 
+      unusualExpenses?: boolean; 
+      monthlyReports?: boolean 
+    }) => apiRequest<{ success: boolean }>('/alerts/settings', 'PUT', settings),
+  }
+};
+
+// Hooks personnalisés pour vérifier l'état d'authentification
+export const useAuth = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState(!!getToken());
+
+  useEffect(() => {
+    const checkAuth = () => setIsAuthenticated(!!getToken());
+    window.addEventListener('storage', checkAuth);
+    return () => window.removeEventListener('storage', checkAuth);
+  }, []);
+
+  return isAuthenticated;
+};
