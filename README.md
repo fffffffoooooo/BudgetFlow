@@ -1,4 +1,4 @@
-
+Cette application web a pour but d’aider les utilisateurs à gérer leur budget personnel de manière simple et intuitive. Elle permet de suivre les revenus, les dépenses, les soldes et de visualiser l’évolution financière en temps réel. Grâce à une interface moderne et réactive, l’utilisateur peut ajouter, modifier ou supprimer des transactions, tout en gardant un aperçu clair de sa situation financière.
 
 **Use your preferred IDE**
 how to work localy
